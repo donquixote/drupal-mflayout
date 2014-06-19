@@ -1,0 +1,220 @@
+<?php
+use Drupal\mflayout\MfLayoutSlotValues;
+
+/**
+ * Implements hook_module_implements_alter()
+ *
+ * @param array $implementations
+ * @param string $hook
+ */
+function mflayout_module_implements_alter(&$implementations, $hook) {
+  if (0
+    || 'form_alter' === $hook
+    || 'theme_registry_alter' === $hook
+  ) {
+    // Push mflayout implementation to the end.
+    unset($implementations['mflayout']);
+    $implementations['mflayout'] = FALSE;
+  }
+}
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ *
+ * @param array $form
+ * @param array $form_state
+ */
+function mflayout_form_field_ui_display_overview_form_alter(&$form, &$form_state) {
+  if (0
+    || !isset($form['#ds_layout'])
+    || !isset($form['#ds_layout']->layout)
+    || !isset($form['#entity_type'])
+    || !isset($form['#bundle'])
+  ) {
+    return;
+  }
+  $layout_definitions = ds_get_layout_info();
+  if (!isset($layout_definitions[$form['#ds_layout']->layout])) {
+    return;
+  }
+  $layout_definition = $layout_definitions[$form['#ds_layout']->layout];
+  if (empty($layout_definition['mflayout_slots'])) {
+    return;
+  }
+  $slots = $layout_definition['mflayout_slots'];
+  $entity_type = $form['#entity_type'];
+  $bundle_name = $form['#bundle'];
+  $fields = field_info_fields();
+  $field_instances = field_info_instances($entity_type, $bundle_name);
+  # dpm($field_instances);
+  # dpm($slots, __FUNCTION__);
+  foreach ($slots as $slot_name => $field_types) {
+    $slot_options = array();
+    foreach ($field_instances as $field_name => $field_instance) {
+      if (in_array($fields[$field_name]['type'], $field_types)) {
+        $slot_options[$field_name] = $field_instance['label'] . ' (' . $field_name . ')';
+      }
+    }
+    $form['additional_settings']['mflayout']['slot_fields'][$slot_name] = array(
+      '#title' => $slot_name,
+      '#type' => 'select',
+      '#options' => $slot_options,
+    );
+  }
+
+  if (empty($form['additional_settings']['mflayout'])) {
+    return;
+  }
+
+  $form['additional_settings']['mflayout'] += array(
+    '#type' => 'fieldset',
+    '#title' => t('Multi-field layout'),
+  );
+}
+
+/**
+ * Implements hook_ds_layout_settings_alter()
+ *
+ * @param object $record
+ * @param array $form_state
+ */
+function mflayout_ds_layout_settings_alter($record, $form_state) {
+
+  if (!isset($form_state['values']['additional_settings']['mflayout'])) {
+    return;
+  }
+  $values = $form_state['values']['additional_settings']['mflayout'];
+
+  // Save slot-to-field mappings.
+  if (isset($values['slot_fields'])) {
+    $record->settings['mflayout']['slot_fields'] = $values['slot_fields'];
+  }
+}
+
+/**
+ * Implements hook_theme_registry_alter().
+ *
+ * @param array $theme_registry
+ */
+function mflayout_theme_registry_alter(&$theme_registry) {
+
+  // Inject ds_entity_variables in all entity theming functions.
+  $entity_info = entity_get_info();
+  foreach ($entity_info as $entity => $info) {
+    if (isset($entity_info[$entity]['fieldable']) && $entity_info[$entity]['fieldable']) {
+
+      // User uses user_profile for theming.
+      if ($entity == 'user') $entity = 'user_profile';
+
+      // Only add preprocess functions if entity exposes theme function.
+      if (isset($theme_registry[$entity])) {
+        $theme_registry[$entity]['preprocess functions'][] = '_mflayout_entity_variables';
+      }
+    }
+  }
+
+  // Support for File Entity.
+  if (isset($theme_registry['file_entity'])) {
+    $theme_registry['file_entity']['preprocess functions'][] = '_mflayout_entity_variables';
+  }
+
+  // Support for Entity API.
+  if (isset($theme_registry['entity'])) {
+    $theme_registry['entity']['preprocess functions'][] = '_mflayout_entity_variables';
+  }
+}
+
+/**
+ * Preprocess callback for theme('node'), theme('entity') etc.
+ *
+ * @param array $vars
+ */
+function _mflayout_entity_variables(&$vars) {
+  if (0
+    || !isset($vars['elements'])
+    || !isset($vars['elements']['#bundle'])
+  ) {
+    return;
+  }
+
+  $layout = ds_get_layout(
+    $vars['elements']['#entity_type'],
+    $vars['elements']['#bundle'],
+    $vars['elements']['#view_mode']);
+
+  if (empty($layout['mflayout_slots'])) {
+    return;
+  }
+
+  $slot_fields = isset($layout['settings']['mflayout']['slot_fields'])
+    ? $layout['settings']['mflayout']['slot_fields']
+    : array();
+
+  $entity_type = $vars['elements']['#entity_type'];
+
+  $entity = ($entity_type === 'taxonomy_term')
+    ? $vars['term']
+    : $vars[$entity_type];
+
+  $vars['mflayout_slots'] = new MfLayoutSlotValues($entity, $entity_type, $slot_fields);
+
+  if (!empty($layout['mflayout_preprocess'])) {
+    // Call custom preprocess functions.
+    foreach ($layout['mflayout_preprocess'] as $function) {
+      $function($vars);
+    }
+  }
+}
+
+/**
+ * Implements hook_ds_layout_info()
+ *
+ * @return array[]
+ *   Example layouts using mflayout slots.
+ */
+function mflayout_ds_layout_info() {
+
+  // __DIR__ would not work here, we need the relative path.
+  $path = drupal_get_path('module', 'mflayout');
+
+  $layouts = array(
+    'mflayout_with_background' => array(
+      'label' => t('Multi-field layout with background image'),
+      'path' => $path . '/layouts/mflayout_with_background',
+      'regions' => array(
+        'ds_content' => t('Content'),
+      ),
+      'css' => TRUE,
+      // optional, form only applies to node form at this point.
+      'form' => TRUE,
+      'mflayout_slots' => array(
+        'background_image' => array('image'),
+      ),
+      'mflayout_preprocess' => array(
+        '_mflayout_preprocess_mflayout_with_background',
+      ),
+    ),
+  );
+
+  return $layouts;
+}
+
+/**
+ * Implements hook_preprocess_THEME_HOOK()
+ *
+ * @param array $vars
+ */
+function _mflayout_preprocess_mflayout_with_background(&$vars) {
+  $slots = $vars['mflayout_slots'];
+  if (!$slots instanceof MfLayoutSlotValues) {
+    return;
+  }
+  $image = $slots->slotGetItem('background_image');
+  if (!$image) {
+    return;
+  }
+  // @todo Properly escape url for CSS.
+  $image_url = file_create_url($image['uri']);
+  $css = "background-image: url('$image_url');";
+  $vars['layout_attributes'] .= ' style="' . check_plain($css) . '"';
+}

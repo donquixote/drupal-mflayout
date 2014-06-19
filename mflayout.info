@@ -1,0 +1,6 @@
+name = Multi-field layout (mflayout)
+description = API for Custom Layouts for Display suite that use fields in addition to regions.
+core = 7.x
+
+dependencies[] = ds
+dependencies[] = xautoload (>= 7.x-5.x)
